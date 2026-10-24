@@ -1,6 +1,6 @@
 # FasftechDotfiles
 
-A portable copy of my custom [Fastfetch](https://github.com/fastfetch-cli/fastfetch)
+A portable copy of a custom [Fastfetch](https://github.com/fastfetch-cli/fastfetch)
 setup for **Omarchy Linux**. It reproduces the Fastfetch layout, the Kitty
 graphics image logo, the image collection, and the `fastfetch-image` command on
 another Omarchy computer.
@@ -32,8 +32,7 @@ It preserves the current setup:
 
 The collection is `fastfetch/images/israrkhan-cys/` and contains **20** PNG/JPEG
 images. The repository's `fastfetch/current-image` is a relative symlink to
-`images/israrkhan-cys/3.png`. The active image on the machine this repository was
-created from is also `3.png`.
+`images/israrkhan-cys/3.png`. The default active image is `3.png`.
 
 Two additional images in the original `~/.config/fastfetch/` directory (`1.png`
 and `h3.png`) are byte-identical duplicates of files already in the collection.
@@ -83,7 +82,7 @@ Omarchy's **About** menu item runs `omarchy-launch-about`, which uses
 `~/.config/fastfetch/config.jsonc` when a user configuration exists. The same
 Fastfetch layout therefore appears in both the terminal and the About window.
 
-The original machine also uses a smaller About window (`620 × 400`) instead of
+This setup optionally uses a smaller About window (`620 × 400`) instead of
 Omarchy's default size. That is an optional Hyprland customization and is kept
 separate from the core Fastfetch installation; see
 [Optional Omarchy integration](#optional-omarchy-integration).
@@ -416,7 +415,7 @@ verification step to fail rather than leaving a silently broken setup.
 ## Optional Omarchy integration
 
 The About window size is a Hyprland setting, not a Fastfetch setting. To use the
-same `620 × 400` size as the original machine:
+same `620 × 400` size used by this setup:
 
 ```sh
 mkdir -p ~/.config/hypr
@@ -430,9 +429,9 @@ require("hypr.fastfetch-about")
 ```
 
 This is optional and is **not** applied by `install.sh`. It is specific to
-Omarchy's Hyprland setup. The original machine's broader glass/opacity rules and
-its `ghostty-glass-sync` helper are also not included because they are
-Ghostty/Hyprland appearance settings rather than Fastfetch configuration.
+Omarchy's Hyprland setup. Broader glass/opacity rules and Ghostty-specific
+helpers are also not included because they are appearance settings rather than
+Fastfetch configuration.
 
 ## Verification performed
 

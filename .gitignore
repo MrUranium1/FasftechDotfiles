@@ -5,8 +5,29 @@
 
 # Local backups created by the installer or by hand
 *.bak
-*.bak.[0-9]*
+*.bak.*
 *.bak-*
 
 # Temporary files created while adding an image
 fastfetch/images/israrkhan-cys/.download.*
+
+# Local credentials and private material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+id_rsa*
+id_ed25519*
+credentials*
+secrets*
+
+# Temporary and debug output
+*.log
+*.tmp
+*.temp
+*.orig
+*.rej

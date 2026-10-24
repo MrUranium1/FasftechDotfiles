@@ -1,0 +1,12 @@
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
+
+# Local backups created by the installer or by hand
+*.bak
+*.bak.[0-9]*
+*.bak-*
+
+# Temporary files created while adding an image
+fastfetch/images/israrkhan-cys/.download.*

@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image_dir="$HOME/.config/fastfetch/images/israrkhan-cys"
+active_image="$HOME/.config/fastfetch/current-image"
+config="$HOME/.config/fastfetch/config.jsonc"
+
+usage() {
+    printf 'Usage:\n'
+    printf '  fastfetch-image                         Choose and display an image\n'
+    printf '  fastfetch-image IMAGE                   Set and display an image\n'
+    printf '  fastfetch-image --size up|down|COLUMNS  Resize the active image\n'
+    printf '  fastfetch-image --add FILE_OR_URL [NAME] Add a local or online PNG/JPEG\n'
+    printf '  fastfetch-image --remove [IMAGE]        Remove an image from the collection\n'
+    printf '  fastfetch-image --list                  List available images\n'
+    printf '  fastfetch-image --help                  Show this help\n'
+}
+
+canonical_path() {
+    readlink -f -- "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+
+if [[ "${1:-}" == "--add" ]]; then
+    source="${2:-}"
+    name="${3:-}"
+    if [[ -z "$source" || $# -gt 3 ]]; then
+        usage >&2
+        exit 2
+    fi
+
+    if [[ "$source" =~ ^https?:// ]]; then
+        source_name="${source%%[#?]*}"
+        source_name="${source_name##*/}"
+    else
+        if [[ ! -f "$source" || ! -r "$source" ]]; then
+            printf 'Local image file does not exist or is unreadable: %s\n' "$source" >&2
+            exit 2
+        fi
+        source_name="$(basename -- "$source")"
+    fi
+
+    if [[ -z "$name" ]]; then
+        name="${source_name%.*}"
+        name="$(printf '%s' "$name" | tr -cs '[:alnum:]_-' '-')"
+        name="${name#-}"
+        name="${name%-}"
+    fi
+    if [[ ! "$name" =~ ^[[:alnum:]_-]+$ ]]; then
+        printf 'Image name must contain only letters, numbers, underscores, or hyphens.\n' >&2
+        exit 2
+    fi
+
+    tmp="$(mktemp "$image_dir/.download.XXXXXX")"
+    trap 'rm -f -- "$tmp"' EXIT
+    if [[ "$source" =~ ^https?:// ]]; then
+        if ! curl --fail --location --silent --show-error --max-time 60 \
+            --max-filesize 26214400 --output "$tmp" "$source"; then
+            printf 'Could not download image from %s\n' "$source" >&2
+            exit 1
+        fi
+    else
+        if ! cp -- "$source" "$tmp"; then
+            printf 'Could not copy local image: %s\n' "$source" >&2
+            exit 1
+        fi
+    fi
+    if (( $(stat -c '%s' "$tmp") > 26214400 )); then
+        printf 'Image exceeds the 25 MiB download limit.\n' >&2
+        exit 1
+    fi
+
+    read -r format width height < <(
+        magick identify -ping -format '%m %w %h\n' "$tmp" 2>/dev/null
+    ) || {
+        printf 'Downloaded file is not a readable image.\n' >&2
+        exit 1
+    }
+    if [[ "$format" == "PNG" ]]; then
+        extension="png"
+    elif [[ "$format" == "JPEG" ]]; then
+        extension="jpg"
+    else
+        printf 'Unsupported image format: %s (use PNG or JPEG).\n' "$format" >&2
+        exit 1
+    fi
+    if (( width < 1 || height < 1 || width > 10000 || height > 10000 || width * height > 40000000 )); then
+        printf 'Image dimensions exceed the supported limit (10000px per side, 40 megapixels total).\n' >&2
+        exit 1
+    fi
+
+    destination="$image_dir/$name.$extension"
+    if [[ -e "$destination" ]]; then
+        printf 'Image already exists: %s\n' "$destination" >&2
+        exit 1
+    fi
+    mv -- "$tmp" "$destination"
+    trap - EXIT
+    printf 'Added %s (%sx%s). Run `fastfetch-image` to select it.\n' \
+        "$(basename "$destination")" "$width" "$height"
+    exit 0
+fi
+
+if [[ "${1:-}" == "--size" ]]; then
+    direction="${2:-}"
+    if (($# != 2)) || [[ ! "$direction" =~ ^(up|down|[0-9]+)$ ]]; then
+        usage >&2
+        exit 2
+    fi
+    if [[ ! -r "$active_image" ]]; then
+        printf 'No active Fastfetch image found.\n' >&2
+        exit 1
+    fi
+
+    current_width="$(python - "$config" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+logo = text.partition('"display"')[0]
+match = re.search(r'"width"\s*:\s*(\d+)', logo)
+if not match:
+    raise SystemExit("Could not read the current Fastfetch image width")
+print(match.group(1))
+PY
+)"
+    case "$direction" in
+        up) target_width=$((current_width + 2)) ;;
+        down) target_width=$((current_width - 2)) ;;
+        *) target_width="$direction" ;;
+    esac
+    if (( target_width < 6 || target_width > 48 )); then
+        printf 'Image width must be between 6 and 48 columns (current: %s).\n' "$current_width" >&2
+        exit 2
+    fi
+
+    read -r image_width image_height < <(
+        magick identify -ping -format '%w %h\n' "$active_image"
+    )
+    module_rows="$(fastfetch --config "$config" --logo none --pipe | wc -l)"
+    read -r logo_width top_padding < <(LC_ALL=C awk -v columns="$target_width" \
+        -v width="$image_width" -v height="$image_height" -v rows="$module_rows" '
+        BEGIN {
+            max_image_rows = rows + 2
+            image_rows = columns * height / width * 0.52
+            if (image_rows > max_image_rows) {
+                columns = int(max_image_rows * width / height / 0.52)
+                if (columns < 1) columns = 1
+                image_rows = columns * height / width * 0.52
+            }
+            top = int((rows - image_rows) / 2 + 0.5)
+            printf "%d %d\n", columns, (top > 0 ? top : 0)
+        }
+    ')
+    [[ "$(basename "$(readlink -f "$active_image")")" == "hypr.png" ]] &&
+        top_padding=$((top_padding + 1))
+    python - "$config" "$logo_width" "$top_padding" <<'PY'
+import re
+import sys
+path, width, top = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding="utf-8") as file:
+    config = file.read()
+logo, separator, remainder = config.partition('"display"')
+if not separator:
+    raise SystemExit("Could not locate Fastfetch logo configuration")
+logo, width_count = re.subn(
+    r'("width"\s*:\s*)\d+',
+    lambda match: match.group(1) + width,
+    logo,
+    count=1,
+)
+logo, top_count = re.subn(
+    r'("padding"\s*:\s*\{\s*"top"\s*:\s*)\d+',
+    lambda match: match.group(1) + top,
+    logo,
+    count=1,
+)
+if width_count != 1 or top_count != 1:
+    raise SystemExit("Could not update Fastfetch image size")
+with open(path, "w", encoding="utf-8") as file:
+    file.write(logo + separator + remainder)
+PY
+    printf 'Fastfetch image size set to %s columns\n' "$logo_width"
+    exec fastfetch --config "$config"
+fi
+
+mapfile -t images < <(
+    find "$image_dir" -maxdepth 1 -type f \
+        \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) \
+        -printf '%f\n' | sort -V
+)
+
+if [[ "${1:-}" == "--remove" ]]; then
+    if ((${#images[@]} == 0)); then
+        printf 'No Fastfetch images found in %s\n' "$image_dir" >&2
+        exit 1
+    fi
+    if ((${#images[@]} == 1)); then
+        printf 'Keep at least one image in the collection; add another before removing this one.\n' >&2
+        exit 1
+    fi
+
+    selected="${2:-}"
+    if [[ -z "$selected" ]]; then
+        if ! command -v fzf >/dev/null 2>&1; then
+            printf 'fzf is required for interactive removal; pass an image name instead.\n' >&2
+            exit 1
+        fi
+        selected="$(printf '%s\n' "${images[@]}" |
+            fzf --prompt='Remove Fastfetch image > ' \
+                --header='Select an image to remove (Esc cancels)')"
+    elif (($# != 2)); then
+        usage >&2
+        exit 2
+    fi
+
+    if [[ ! " ${images[*]} " == *" $selected "* ]]; then
+        printf 'Unknown image: %s\nAvailable images: %s\n' "$selected" "${images[*]}" >&2
+        exit 2
+    fi
+
+    printf 'Remove %s from the Fastfetch image collection? [y/N] ' "$selected" >&2
+    read -r confirmation
+    if [[ ! "$confirmation" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        printf 'Removal cancelled.\n'
+        exit 0
+    fi
+
+    current_image="$(canonical_path "$active_image")"
+    replacement=""
+    if [[ "$current_image" == "$(canonical_path "$image_dir/$selected")" ]]; then
+        for image in "${images[@]}"; do
+            if [[ "$image" != "$selected" ]]; then
+                replacement="$image"
+                break
+            fi
+        done
+    fi
+    rm -- "$image_dir/$selected"
+    printf 'Removed %s\n' "$selected"
+    if [[ -n "$replacement" ]]; then
+        printf 'Switched active image to %s\n' "$replacement"
+        exec "$0" "$replacement"
+    fi
+    exit 0
+fi
+
+if ((${#images[@]} == 0)); then
+    printf 'No Fastfetch images found in %s\n' "$image_dir" >&2
+    exit 1
+fi
+
+case "${1:-}" in
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    --list)
+        for image in "${images[@]}"; do
+            printf '%s\n' "$image"
+        done
+        exit 0
+        ;;
+esac
+
+selected="${1:-}"
+if [[ -z "$selected" ]]; then
+    if ! command -v fzf >/dev/null 2>&1; then
+        printf 'fzf is required for interactive selection; pass an image name instead.\n' >&2
+        exit 1
+    fi
+
+    current_image="$(canonical_path "$active_image")"
+    rows=()
+    for image in "${images[@]}"; do
+        dimensions="$(magick identify -format '%wx%h' "$image_dir/$image" 2>/dev/null || printf 'unknown size')"
+        marker=""
+        [[ "$current_image" == "$(canonical_path "$image_dir/$image")" ]] && marker="current"
+        rows+=("$image"$'\t'"$dimensions"$'\t'"$marker")
+    done
+
+    choice="$(printf '%s\n' "${rows[@]}" |
+        fzf --delimiter=$'\t' --with-nth=1,2,3 \
+            --prompt='Fastfetch image > ' \
+            --header='Choose an image (Enter applies, Esc cancels)')"
+    selected="${choice%%$'\t'*}"
+fi
+
+if [[ ! " ${images[*]} " == *" $selected "* ]]; then
+    printf 'Unknown image: %s\nAvailable images: %s\n' "$selected" "${images[*]}" >&2
+    exit 2
+fi
+
+ln -sfn -- "images/israrkhan-cys/$selected" "$active_image"
+read -r image_width image_height < <(
+    magick identify -ping -format '%w %h\n' "$active_image"
+)
+max_logo_width="$(python - "$config" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+logo = text.partition('"display"')[0]
+match = re.search(r'"width"\s*:\s*(\d+)', logo)
+if not match:
+    raise SystemExit("Could not read the current Fastfetch image width")
+print(match.group(1))
+PY
+)"
+module_rows="$(fastfetch --config "$config" --logo none --pipe | wc -l)"
+read -r logo_width top_padding < <(LC_ALL=C awk -v max_columns="$max_logo_width" \
+    -v width="$image_width" -v height="$image_height" -v rows="$module_rows" '
+    BEGIN {
+        columns = max_columns
+        max_image_rows = rows + 2
+        image_rows = columns * height / width * 0.52
+        if (image_rows > max_image_rows) {
+            columns = int(max_image_rows * width / height / 0.52)
+            if (columns < 1) columns = 1
+            image_rows = columns * height / width * 0.52
+        }
+        top = int((rows - image_rows) / 2 + 0.5)
+        printf "%d %d\n", columns, (top > 0 ? top : 0)
+    }
+')
+if [[ "$selected" == "hypr.png" ]]; then
+    top_padding=$((top_padding + 1))
+fi
+python - "$config" "$logo_width" "$top_padding" <<'PY'
+import re
+import sys
+path, width, top = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding="utf-8") as file:
+    config = file.read()
+logo, separator, remainder = config.partition("\"display\"")
+if not separator:
+    raise SystemExit("Could not locate Fastfetch logo configuration")
+logo, width_count = re.subn(
+    r"(\"width\"\s*:\s*)\d+",
+    lambda match: match.group(1) + width,
+    logo,
+    count=1,
+)
+logo, top_count = re.subn(
+    r"(\"padding\"\s*:\s*\{\s*\"top\"\s*:\s*)\d+",
+    lambda match: match.group(1) + top,
+    logo,
+    count=1,
+)
+if width_count != 1 or top_count != 1:
+    raise SystemExit("Could not update Fastfetch logo top padding")
+with open(path, "w", encoding="utf-8") as file:
+    file.write(logo + separator + remainder)
+PY
+printf 'Fastfetch image set to %s\n' "$selected"
+printf 'Image width set to %s columns and centered with %s rows of top padding\n' \
+    "$logo_width" "$top_padding"
+exec fastfetch --config "$config"

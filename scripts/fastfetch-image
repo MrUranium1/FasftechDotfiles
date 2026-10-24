@@ -20,6 +20,16 @@ canonical_path() {
     readlink -f -- "$1" 2>/dev/null || printf '%s\n' "$1"
 }
 
+python_command() {
+    if command -v python >/dev/null 2>&1; then
+        printf 'python\n'
+    elif command -v python3 >/dev/null 2>&1; then
+        printf 'python3\n'
+    else
+        return 1
+    fi
+}
+
 if [[ "${1:-}" == "--add" ]]; then
     source="${2:-}"
     name="${3:-}"
@@ -111,7 +121,11 @@ if [[ "${1:-}" == "--size" ]]; then
         exit 1
     fi
 
-    current_width="$(python - "$config" <<'PY'
+    python_bin="$(python_command)" || {
+        printf 'python or python3 is required to update the Fastfetch configuration.\n' >&2
+        exit 1
+    }
+    current_width="$("$python_bin" - "$config" <<'PY'
 import re
 import sys
 text = open(sys.argv[1], encoding="utf-8").read()
@@ -152,7 +166,7 @@ PY
     ')
     [[ "$(basename "$(readlink -f "$active_image")")" == "hypr.png" ]] &&
         top_padding=$((top_padding + 1))
-    python - "$config" "$logo_width" "$top_padding" <<'PY'
+    "$python_bin" - "$config" "$logo_width" "$top_padding" <<'PY'
 import re
 import sys
 path, width, top = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -293,7 +307,11 @@ ln -sfn -- "images/israrkhan-cys/$selected" "$active_image"
 read -r image_width image_height < <(
     magick identify -ping -format '%w %h\n' "$active_image"
 )
-max_logo_width="$(python - "$config" <<'PY'
+python_bin="$(python_command)" || {
+    printf 'python or python3 is required to update the Fastfetch configuration.\n' >&2
+    exit 1
+}
+max_logo_width="$("$python_bin" - "$config" <<'PY'
 import re
 import sys
 text = open(sys.argv[1], encoding="utf-8").read()
@@ -323,7 +341,7 @@ read -r logo_width top_padding < <(LC_ALL=C awk -v max_columns="$max_logo_width"
 if [[ "$selected" == "hypr.png" ]]; then
     top_padding=$((top_padding + 1))
 fi
-python - "$config" "$logo_width" "$top_padding" <<'PY'
+"$python_bin" - "$config" "$logo_width" "$top_padding" <<'PY'
 import re
 import sys
 path, width, top = sys.argv[1], sys.argv[2], sys.argv[3]

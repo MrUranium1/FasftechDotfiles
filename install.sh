@@ -3,7 +3,7 @@
 #
 # The installer links the repository's fastfetch directory and the
 # fastfetch-image command into place. Existing files are moved aside, never
-# deleted. Running it again is a no-op once the links are in place.
+# deleted. Running it again is safe and idempotent.
 set -euo pipefail
 
 : "${HOME:?HOME must be set}"
@@ -52,10 +52,28 @@ link_into_place() {
 ensure_current_image() {
     local current="$FASTFETCH_SOURCE/current-image"
     local images_dir="$FASTFETCH_SOURCE/images/israrkhan-cys"
+    local target relative first
 
-    [[ -e "$current" ]] && return 0
+    # Prefer a relative link into the collection. This keeps the repository
+    # portable if it was cloned to a different home directory.
+    if [[ -L "$current" && -e "$current" ]]; then
+        target="$(readlink -f -- "$current" 2>/dev/null || true)"
+        if [[ -n "$target" && "$target" == "$FASTFETCH_SOURCE/images/"* ]]; then
+            relative="${target#"$FASTFETCH_SOURCE/"}"
+            if [[ "$(readlink -- "$current")" != "$relative" ]]; then
+                ln -sfn -- "$relative" "$current"
+                info "Normalized current-image -> $relative"
+            fi
+        fi
+        return 0
+    fi
 
-    local first
+    # A regular file (or a working link to an image outside the collection) is
+    # left alone.
+    if [[ -e "$current" ]]; then
+        return 0
+    fi
+
     first="$(find "$images_dir" -maxdepth 1 -type f \
         \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) \
         -printf '%f\n' 2>/dev/null | sort -V | head -n 1 || true)"
@@ -67,14 +85,37 @@ ensure_current_image() {
     fi
 }
 
+verify_install() {
+    local config="$FASTFETCH_TARGET/config.jsonc"
+    local current="$FASTFETCH_TARGET/current-image"
+
+    if [[ ! -r "$config" ]]; then
+        warn "Installed Fastfetch config is missing or unreadable: $config"
+        return 1
+    fi
+    if [[ ! -x "$SCRIPT_TARGET" ]]; then
+        warn "Installed command is missing or not executable: $SCRIPT_TARGET"
+        return 1
+    fi
+    if [[ -e "$current" ]]; then
+        info "Active image: $(basename -- "$(readlink -f -- "$current")")"
+    else
+        warn "current-image is missing or broken: $current"
+        return 1
+    fi
+}
+
 check_dependencies() {
     local missing_required=()
     local missing_optional=()
     local command
 
-    for command in fastfetch magick python awk; do
+    for command in fastfetch magick awk; do
         command -v "$command" >/dev/null 2>&1 || missing_required+=("$command")
     done
+    if ! command -v python >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+        missing_required+=("python or python3")
+    fi
     for command in fzf curl; do
         command -v "$command" >/dev/null 2>&1 || missing_optional+=("$command")
     done
@@ -115,6 +156,7 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
 fi
 
 check_dependencies
+verify_install || exit 1
 
 info ""
 info "Done. Try: fastfetch"
